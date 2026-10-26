@@ -26,25 +26,27 @@ class DpiTab(QWidget):
         new = QPushButton("New preset")
         new.clicked.connect(self._new_preset)
         grid = QGridLayout()
-        for c, h in enumerate(("Stage", "On", "DPI", "Light colour")):
+        for c, h in enumerate(("Stage", "On", "DPI", "Separate Y", "DPI Y", "Light colour")):
             grid.addWidget(QLabel(f"<b>{h}</b>"), 0, c)
-        self.rows: dict[str, tuple[QLabel, QCheckBox, QSpinBox, ColorButton]] = {}
+        self.rows: dict[str, dict] = {}
         for r, key in enumerate(STAGES, 1):
-            on = QCheckBox()
-            dpi = QSpinBox(minimum=100, maximum=26000, singleStep=50)
-            col = ColorButton()
+            w = {"on": QCheckBox(), "x": QSpinBox(minimum=100, maximum=26000, singleStep=50), "sep": QCheckBox(),
+                 "y": QSpinBox(minimum=100, maximum=26000, singleStep=50), "color": ColorButton()}
+            w["y"].setEnabled(False)
+            w["on"].toggled.connect(lambda v, k=key: self._edit(k, enabled=v))
+            w["x"].valueChanged.connect(lambda v, k=key: self._edit(k, x=v))
+            w["sep"].toggled.connect(lambda v, k=key: self._edit(k, sep=v))
+            w["y"].valueChanged.connect(lambda v, k=key: self._edit(k, y=v))
+            w["color"].colorChanged.connect(lambda c, k=key: self._edit(k, color=[round(c.r * 255), round(c.g * 255), round(c.b * 255)]))
             label = QLabel("Sniper (while the sniper button is held)" if key == "sniper" else f"Stage {key}")
-            on.toggled.connect(lambda v, k=key: self._edited(k, "enabled", v))
-            dpi.valueChanged.connect(lambda v, k=key: self._edited(k, "dpi", v))
-            col.colorChanged.connect(lambda c, k=key: self._edited(k, "color", [round(c.r * 255), round(c.g * 255), round(c.b * 255)]))
-            for c, w in enumerate((label, on, dpi, col)):
-                grid.addWidget(w, r, c)
-            self.rows[key] = (label, on, dpi, col)
+            for c, widget in enumerate((label, w["on"], w["x"], w["sep"], w["y"], w["color"])):
+                grid.addWidget(widget, r, c)
+            self.rows[key] = w
         self.default = QComboBox()
         self.default.addItems([f"Stage {i}" for i in range(1, 6)])
         self.default.activated.connect(self._default_edited)
-        self.use = QLabel()
         note = QLabel("The DPI button cycles the enabled stages. The DPI light shows the colour of the active stage. "
+                      "Tick “Separate Y” only if you want a different vertical DPI. "
                       "Changes apply when the daemon reloads (a second after saving).")
         note.setWordWrap(True)
         lay = QVBoxLayout(self)
@@ -74,16 +76,23 @@ class DpiTab(QWidget):
         self._load(self.which.currentData())
         self.loading = False
 
+    def _stage(self, key: str) -> dict | None:
+        p = self.presets.get(self.which.currentData()) or {}
+        return p.get("sniper") if key == "sniper" else p.get("stages", {}).get(key)
+
     def _load(self, pid) -> None:
         p = self.presets.get(pid)
         self.name.setText(p.get("name", "") if p else "")
-        for key, (_, on, dpi, col) in self.rows.items():
-            st = (p or {}).get("sniper" if key == "sniper" else "stages", {})
-            st = st if key == "sniper" else st.get(key)
+        for key, w in self.rows.items():
+            st = self._stage(key)
             if st:
-                on.setChecked(st["enabled"])
-                dpi.setValue(st["dpi"][0])
-                col.set_color(Color(*(c / 255 for c in st["color"])))
+                x, y = st["dpi"]
+                w["on"].setChecked(st["enabled"])
+                w["x"].setValue(x)
+                w["y"].setValue(y)
+                w["sep"].setChecked(x != y)
+                w["y"].setEnabled(x != y)
+                w["color"].set_color(Color(*(c / 255 for c in st["color"])))
         self.default.setCurrentIndex(int((p or {}).get("default", 1)) - 1)
 
     @property
@@ -94,16 +103,35 @@ class DpiTab(QWidget):
         pid = self.which.currentData()
         if self.profile and self.profile.mouse and pid:
             self.profile.mouse.dpi_ref = pid
+            self.loading = True
             self._load(pid)
+            self.loading = False
             self.changed.emit()
 
-    def _edited(self, key: str, field: str, value) -> None:
-        if self.loading or not self.preset:
+    def _edit(self, key: str, **change) -> None:
+        """One stage widget changed. Y follows X unless “Separate Y” is ticked."""
+        st = self._stage(key)
+        if self.loading or st is None:
             return
-        st = self.preset["sniper"] if key == "sniper" else self.preset["stages"][key]
-        st["dpi"] = [value, value] if field == "dpi" else st["dpi"]
-        if field != "dpi":
-            st[field] = value
+        w = self.rows[key]
+        x, y = st["dpi"]
+        if "x" in change:
+            x = change["x"]
+            y = y if w["sep"].isChecked() else x
+        if "y" in change:
+            y = change["y"]
+        if "sep" in change:
+            w["y"].setEnabled(change["sep"])
+            if not change["sep"]:
+                y = x
+        st["dpi"] = [x, y]
+        if w["y"].value() != y:
+            self.loading = True
+            w["y"].setValue(y)
+            self.loading = False
+        for field in ("enabled", "color"):
+            if field in change:
+                st[field] = change[field]
         self.presetsChanged.emit()
 
     def _default_edited(self, i: int) -> None:

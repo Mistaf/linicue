@@ -152,5 +152,67 @@ class OneShotTests(unittest.TestCase):
         self.assertEqual(log.count(("k", ev.KEY_LEFTSHIFT, True)), 1)  # not shifted for lower-case "i"
 
 
+class LaunchTests(unittest.TestCase):
+    def run_launch(self, **fields):
+        from linicue.profile import LaunchAction
+        spawned, logs = [], []
+
+        class Proc:
+            async def wait(self):
+                return 0
+
+        async def spawn(*argv):
+            spawned.append(list(argv))
+            if argv[0] == "missing":
+                raise FileNotFoundError(2, "No such file")
+            return Proc()
+
+        async def main():
+            p = Player(Rec(), spawn=spawn, log=logs.append)
+            p.button("G1", LaunchAction(**common(), **{"path": "", "url": "", "predefined": 0, **fields}), True)
+            await settle()
+        asyncio.run(main())
+        return spawned, logs
+
+    def test_runs_a_command_line_with_quoting(self):
+        spawned, _ = self.run_launch(path="firefox --new-window 'a b'")
+        self.assertEqual(spawned, [["firefox", "--new-window", "a b"]])
+
+    def test_opens_an_address_with_xdg_open(self):
+        spawned, _ = self.run_launch(url="https://example.org")
+        self.assertEqual(spawned, [["xdg-open", "https://example.org"]])
+
+    def test_windows_paths_from_icue_are_skipped_and_logged(self):
+        spawned, logs = self.run_launch(path="C:\\Games\\run.bat")
+        self.assertEqual(spawned, [])
+        self.assertTrue(any("Windows path" in m for m in logs))
+
+    def test_empty_action_unreadable_command_and_missing_program_are_harmless(self):
+        self.assertEqual(self.run_launch()[0], [])
+        spawned, logs = self.run_launch(path="echo 'unclosed")
+        self.assertEqual(spawned, [])
+        self.assertTrue(any("cannot read" in m for m in logs))
+        spawned, logs = self.run_launch(path="missing --flag")
+        self.assertEqual(spawned, [["missing", "--flag"]])
+        self.assertTrue(any("launch failed" in m for m in logs))
+
+    def test_release_does_not_launch_again(self):
+        from linicue.profile import LaunchAction
+        spawned = []
+
+        async def spawn(*argv):
+            spawned.append(argv)
+            raise OSError("stop")
+
+        async def main():
+            p = Player(Rec(), spawn=spawn)
+            a = LaunchAction(**common(), path="true", url="", predefined=5)
+            p.button("G1", a, True)
+            p.button("G1", a, False)
+            await settle()
+        asyncio.run(main())
+        self.assertEqual(len(spawned), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

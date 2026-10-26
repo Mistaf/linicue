@@ -10,12 +10,14 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 
 from .. import keys
 from ..keys import DPI_DOWN, DPI_UP, SNIPER
+from ..player import looks_windows
 from ..profile import (Action, Binding, ExecHints, KeyRemapAction, LaunchAction, MacroAction, MacroEvent, MediaAction,
                        ProfileSwitchAction, RepeatOptions, TextAction)
 
 BUTTONS = [(f"MouseG{i}", f"G{i}") for i in range(1, 13)] + [("MouseDpiToggle", "DPI button (top)"), ("MouseProfileSwitch", "Profile switch button (top)")]
 MEDIA = {"PlayPause": "Play / Pause", "NextTrack": "Next track", "PrevTrack": "Previous track", "Stop": "Stop",
          "Mute": "Mute", "VolumeUp": "Volume up", "VolumeDown": "Volume down"}
+MOUSE_BUTTONS = {1: "Left", 2: "Right", 3: "Middle", 4: "Back", 5: "Forward"}
 DPI_FUNCTIONS = {"Mouse8": "Sniper (lower DPI while held)", "Mouse6": "DPI up", "Mouse7": "DPI down"}
 PRETTY = {"LeftCtrl": "Ctrl", "RightCtrl": "Right Ctrl", "LeftShift": "Shift", "RightShift": "Right Shift", "LeftAlt": "Alt",
           "RightAlt": "Alt Gr", "LeftGui": "Meta", "RightGui": "Right Meta", "SlashAndQuestionMark": "/", "Space": "Space",
@@ -73,7 +75,10 @@ def describe(a: Action | None, profiles: list | None = None) -> str:
         target = next((p.name for p in profiles or [] if p.id == a.target), None)
         return f"Switch to profile {target!r}" if target else "Switch profile"
     if isinstance(a, LaunchAction):
-        return "Launch application (not supported on Linux)"
+        target = a.path or a.url
+        if not target or looks_windows(target):
+            return "Launch (a Windows path: will not run on Linux)"
+        return ("Run: " if a.path else "Open: ") + target[:40]
     return a.type or "(unknown)"
 
 
@@ -216,6 +221,7 @@ class MacroEditor(QWidget):
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Event", "Value"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setColumnWidth(0, 150)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.verticalHeader().hide()
         self.rec = KeyStream("● Record")
@@ -224,15 +230,19 @@ class MacroEditor(QWidget):
         self.rec.keyDown.connect(lambda n: self.record_event(n, True))
         self.rec.keyUp.connect(lambda n: self.record_event(n, False))
         self.last_t: float | None = None
-        add_key, add_delay, rm, up, down, clear = (QPushButton(t) for t in ("Add key tap", "Add delay", "Delete", "Up", "Down", "Clear"))
+        add_key, add_delay, add_click, rm, up, down, clear = (QPushButton(t) for t in ("Add key tap", "Add delay", "Add click", "Delete", "Up", "Down", "Clear"))
+        self.click_button = QComboBox()
+        for n, name in MOUSE_BUTTONS.items():
+            self.click_button.addItem(name, n)
         add_key.clicked.connect(lambda: self._add_tap("A"))
+        add_click.clicked.connect(lambda: self._add_click(self.click_button.currentData()))
         add_delay.clicked.connect(lambda: self._append(MacroEvent("delay", delay_ms=50)))
         rm.clicked.connect(self._delete)
         up.clicked.connect(lambda: self._move(-1))
         down.clicked.connect(lambda: self._move(1))
         clear.clicked.connect(self._clear)
         bar = QHBoxLayout()
-        for b in (self.rec, add_key, add_delay, rm, up, down, clear):
+        for b in (self.rec, add_key, add_delay, add_click, self.click_button, rm, up, down, clear):
             bar.addWidget(b)
         self.mode = QComboBox()
         for text, when, rep in (("Run once when pressed", "OnPress", "NoRepeat"), ("Repeat while the button is held", "WhilePressed", "RepeatConstantly"),
@@ -262,7 +272,7 @@ class MacroEditor(QWidget):
         if e.kind == "key":
             return ("Press" if e.pressed else "Release"), " + ".join(pretty(k) for k in e.keys)
         if e.kind == "mouse":
-            return ("Mouse button down" if e.pressed else "Mouse button up"), str(e.button)
+            return ("Mouse button down" if e.pressed else "Mouse button up"), MOUSE_BUTTONS.get(e.button, str(e.button))
         if e.delay_max_ms is not None:
             return "Random delay", f"{e.delay_ms}–{e.delay_max_ms} ms"
         return "Delay", f"{e.delay_ms} ms"
@@ -282,6 +292,13 @@ class MacroEditor(QWidget):
                 combo.setCurrentText(e.keys[0] if e.keys else "A")
                 combo.currentTextChanged.connect(lambda n, ev=e: self._set_key(ev, n))
                 self.table.setCellWidget(i, 1, combo)
+            elif e.kind == "mouse":
+                combo = QComboBox()
+                for n, name in MOUSE_BUTTONS.items():
+                    combo.addItem(name, n)
+                combo.setCurrentIndex(max(0, combo.findData(e.button)))
+                combo.currentIndexChanged.connect(lambda _, ev=e, cb=combo: setattr(ev, "button", cb.currentData()))
+                self.table.setCellWidget(i, 1, combo)
             elif e.kind == "delay" and e.delay_max_ms is None:
                 sp = QSpinBox(minimum=0, maximum=600000, suffix=" ms")
                 sp.setValue(e.delay_ms)
@@ -298,6 +315,11 @@ class MacroEditor(QWidget):
 
     def _add_tap(self, name: str) -> None:
         self.macro.events += [MacroEvent("key", (name,), True), MacroEvent("delay", delay_ms=30), MacroEvent("key", (name,), False)]
+        self.refill()
+
+    def _add_click(self, button: int) -> None:
+        self.macro.events += [MacroEvent("mouse", pressed=True, button=button), MacroEvent("delay", delay_ms=30),
+                              MacroEvent("mouse", pressed=False, button=button)]
         self.refill()
 
     def _delete(self) -> None:
@@ -344,8 +366,8 @@ class MacroEditor(QWidget):
 
 
 class ActionDialog(QDialog):
-    TYPES = ["Nothing", "Key or key combination", "Macro", "Type text", "DPI function", "Switch profile"]
-    NOTHING, KEY, MACRO, TEXT, DPI, SWITCH = range(6)
+    TYPES = ["Nothing", "Key or key combination", "Macro", "Type text", "DPI function", "Switch profile", "Run a program or open an address"]
+    NOTHING, KEY, MACRO, TEXT, DPI, SWITCH, LAUNCH = range(7)
 
     def __init__(self, button_label: str, current: Action | None, profiles: list, parent=None):
         super().__init__(parent)
@@ -396,7 +418,28 @@ class ActionDialog(QDialog):
         sp = QWidget()
         QVBoxLayout(sp).addWidget(self.target)
         sp.layout().addStretch(1)
-        for w in (QWidget(), kp, xp, tp, dp, sp):
+        # launch
+        self.launch_mode = QComboBox()
+        self.launch_mode.addItem("Run a program (a command line)", "run")
+        self.launch_mode.addItem("Open a web address or a file", "open")
+        self.launch_target = QLineEdit()
+        self.launch_target.setPlaceholderText("e.g. firefox --new-window  /  https://example.org  /  /home/me/notes.txt")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse_launch)
+        self.launch_note = QLabel("")
+        self.launch_note.setWordWrap(True)
+        self.launch_target.textChanged.connect(self._launch_hint)
+        lrow = QHBoxLayout()
+        lrow.addWidget(self.launch_target)
+        lrow.addWidget(browse)
+        lp = QWidget()
+        ll = QVBoxLayout(lp)
+        for w in (self.launch_mode,):
+            ll.addWidget(w)
+        ll.addLayout(lrow)
+        ll.addWidget(self.launch_note)
+        ll.addStretch(1)
+        for w in (QWidget(), kp, xp, tp, dp, sp, lp):
             self.pages.addWidget(w)
         self.kind.currentIndexChanged.connect(self.pages.setCurrentIndex)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -408,6 +451,16 @@ class ActionDialog(QDialog):
         lay.addWidget(self.pages, 1)
         lay.addWidget(buttons)
         self._prefill()
+
+    def _browse_launch(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a program or file")
+        if path:
+            self.launch_target.setText(f'"{path}"' if " " in path and self.launch_mode.currentData() == "run" else path)
+
+    def _launch_hint(self, text: str) -> None:
+        self.launch_note.setText("This is a Windows path (imported from iCUE). It cannot run on Linux; replace it with a Linux command."
+                                 if looks_windows(text) else "")
 
     def add_keys(self, names: list[str]) -> None:
         combo = self.capture.combo + [n for n in names if n not in self.capture.combo]
@@ -438,6 +491,10 @@ class ActionDialog(QDialog):
         elif isinstance(a, ProfileSwitchAction):
             index = self.SWITCH
             self.target.setCurrentIndex(max(0, self.target.findData(a.target)))
+        elif isinstance(a, LaunchAction):
+            index = self.LAUNCH
+            self.launch_mode.setCurrentIndex(0 if a.path or not a.url else 1)
+            self.launch_target.setText(a.path or a.url)
         self.kind.setCurrentIndex(index)
 
     def result_action(self) -> Action | None:
@@ -453,6 +510,10 @@ class ActionDialog(QDialog):
             return make_action(TextAction, "TextAction", "Text", text=self.text.text(), char_delay_ms=0)
         if i == self.DPI:
             return make_action(KeyRemapAction, "KeyRemapAction", "DPI", "OnBoth", key=self.dpi.currentData(), keystroke=())
+        if i == self.LAUNCH and self.launch_target.text().strip():
+            text, run = self.launch_target.text().strip(), self.launch_mode.currentData() == "run"
+            return make_action(LaunchAction, "LaunchApplicationAction", "Launch", path=text if run else "", url="" if run else text,
+                               predefined=5 if run else 0)
         if i == self.SWITCH and self.target.currentData():
             return make_action(ProfileSwitchAction, "ProfileSwitchingAction", "Switch profile", switch_type="Direct",
                                target=self.target.currentData(), targets=(), direction="Forward", loop=True)

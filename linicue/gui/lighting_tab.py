@@ -14,7 +14,15 @@ from ..profile import Color, Effect, LightingLayer
 from .common import ColorButton, color_of, qcolor
 
 LED_NAMES = {"MouseFrontLed": "Front", "MouseLogoLed": "Logo", "MouseDpiLed": "DPI", "MouseScrollLed": "Scroll", "MouseSideLed": "Side"}
-KINDS = {"StaticLighting": "Static colour", "GradientLighting": "Gradient (loops)", "TemperatureLighting": "Temperature (CPU)"}
+KINDS = {"StaticLighting": "Static colour", "GradientLighting": "Gradient (loops)", "TemperatureLighting": "Temperature (CPU)",
+         "SingleColorPulseLighting": "Pulse (one colour fades in and out)", "BlinkLighting": "Blink (two colours)",
+         "SingleColorVisorLighting": "Visor (a colour sweeps across)", "RainbowLighting": "Rainbow (all LEDs)",
+         "RainbowWaveLighting": "Rainbow wave (across the LEDs)"}
+COLOR_COUNT = {"StaticLighting": 1, "SingleColorPulseLighting": 1, "SingleColorVisorLighting": 1, "BlinkLighting": 2,
+               "RainbowLighting": 0, "RainbowWaveLighting": 0}  # kinds with a fixed number of colours (0 = none to pick)
+COLOR_LABELS = {"StaticLighting": ["always"], "SingleColorPulseLighting": ["Colour"], "SingleColorVisorLighting": ["Colour"],
+                "BlinkLighting": ["First", "Second"]}
+LOOPING = {"GradientLighting", "SingleColorPulseLighting", "BlinkLighting", "SingleColorVisorLighting", "RainbowLighting", "RainbowWaveLighting"}
 TEMP_DEFAULT = [(0.0, Color(0, 1, 0)), (50.0, Color(0, 1, 0)), (60.0, Color(1, 1, 0)), (80.0, Color(1, 0, 0))]
 
 
@@ -23,7 +31,11 @@ def new_effect(kind: str) -> Effect:
         return Effect(kind, 1000, 10, [(0.0, Color(1, 1, 1))])
     if kind == "GradientLighting":
         return Effect(kind, 5000, 10, [(0.0, Color(0, 0.6, 1)), (0.5, Color(1, 0.2, 0.8)), (1.0, Color(0, 0.6, 1))])
-    return Effect(kind, 1000, 10, list(TEMP_DEFAULT), {})
+    if kind == "TemperatureLighting":
+        return Effect(kind, 1000, 10, list(TEMP_DEFAULT), {})
+    stops = {"BlinkLighting": [(0.0, Color(1, 0, 0)), (1.0, Color(0, 0, 1))], "SingleColorPulseLighting": [(0.0, Color(0, 0.7, 1))],
+             "SingleColorVisorLighting": [(0.0, Color(1, 0.1, 0.1))]}.get(kind, [])
+    return Effect(kind, 2000 if kind == "BlinkLighting" else 4000, 10, stops, {})
 
 
 class MousePreview(QWidget):
@@ -147,8 +159,10 @@ class LightingTab(QWidget):
         self.stops.verticalHeader().hide()
         self.stops.setColumnWidth(0, 110)
         self.stops.horizontalHeader().setStretchLastSection(True)
-        add_stop = QPushButton("Add colour stop")
+        self.add_stop_btn = add_stop = QPushButton("Add colour stop")
         add_stop.clicked.connect(self._add_stop)
+        self.reverse = QCheckBox("Run backwards")
+        self.reverse.toggled.connect(self._reverse_edited)
         form = QFormLayout()
         form.addRow("Name", self.name)
         form.addRow("LEDs", leds)
@@ -156,6 +170,7 @@ class LightingTab(QWidget):
         form.addRow("Brightness (0-10)", brightness_row)
         self.duration_label = QLabel("Loop length")
         form.addRow(self.duration_label, self.duration)
+        form.addRow("", self.reverse)
         box = QGroupBox("Selected layer")
         bl = QVBoxLayout(box)
         bl.addLayout(form)
@@ -212,22 +227,29 @@ class LightingTab(QWidget):
         self.kind.setCurrentIndex(max(0, self.kind.findData(e.kind)) if e else 0)
         self.brightness.setValue(e.brightness if e else 10)
         self.duration.setValue(e.duration_ms if e else 1000)
-        gradient = bool(e and e.kind == "GradientLighting")
-        self.duration.setVisible(gradient)
-        self.duration_label.setVisible(gradient)
+        looping = bool(e and e.kind in LOOPING)
+        self.duration.setVisible(looping)
+        self.duration_label.setVisible(looping)
+        self.reverse.setVisible(bool(e and e.kind == "RainbowWaveLighting"))
+        self.reverse.setChecked(bool(e and e.params.get("reverse")))
         self._fill_stops()
         self.loading = False
 
     def _fill_stops(self) -> None:
         e = self.layer.effect
         temp = e.kind == "TemperatureLighting"
-        static = e.kind == "StaticLighting"
+        fixed = e.kind in COLOR_LABELS
+        colourless = COLOR_COUNT.get(e.kind) == 0
+        for w in (self.bar, self.stops, self.add_stop_btn):
+            w.setVisible(not colourless)
+        self.add_stop_btn.setVisible(not colourless and not fixed)
+        self.bar.setVisible(not colourless and not fixed)
         self.stops.setRowCount(0)
-        self.stops.setHorizontalHeaderLabels(["Temperature" if temp else "Position", "Colour", ""])
+        self.stops.setHorizontalHeaderLabels(["Temperature" if temp else "Colour for" if fixed else "Position", "Colour", ""])
         for i, (t, c) in enumerate(e.stops):
             self.stops.insertRow(i)
-            if static:
-                self.stops.setCellWidget(i, 0, QLabel("always"))
+            if fixed:
+                self.stops.setCellWidget(i, 0, QLabel(COLOR_LABELS[e.kind][min(i, len(COLOR_LABELS[e.kind]) - 1)]))
             else:
                 sp = QSpinBox(minimum=0, maximum=100, suffix=" °C" if temp else " %")
                 sp.setValue(round(t if temp else t * 100))
@@ -236,7 +258,7 @@ class LightingTab(QWidget):
             cb = ColorButton(c)
             cb.colorChanged.connect(lambda col, i=i: self._stop_color(i, col))
             self.stops.setCellWidget(i, 1, cb)
-            if not static and len(e.stops) > 2:
+            if not fixed and len(e.stops) > 2:
                 rm = QPushButton("Remove")
                 rm.clicked.connect(lambda _, i=i: self._del_stop(i))
                 self.stops.setCellWidget(i, 2, rm)
@@ -303,10 +325,19 @@ class LightingTab(QWidget):
         if self.layer and not self.loading and (not self.layer.effect or self.layer.effect.kind != kind):
             old = self.layer.effect
             fresh = new_effect(kind)
-            if old and kind != "TemperatureLighting" and old.kind != "TemperatureLighting":
-                fresh.stops = old.stops[:1] if kind == "StaticLighting" else (old.stops if len(old.stops) > 1 else old.stops * 2)
-                if kind == "GradientLighting" and len(fresh.stops) == 2 and fresh.stops[0][0] == fresh.stops[1][0]:
-                    fresh.stops = [(0.0, fresh.stops[0][1]), (1.0, fresh.stops[1][1])]
+            kept = [c for _, c in old.stops] if old and old.kind != "TemperatureLighting" else []
+            if kept and kind != "TemperatureLighting":
+                if kind in COLOR_COUNT:  # fixed number of colours: reuse the old ones, then the defaults
+                    cols = (kept + [c for _, c in fresh.stops])[:COLOR_COUNT[kind]]
+                    fresh.stops = [(float(i), c) for i, c in enumerate(cols)] if len(cols) > 1 else [(0.0, c) for c in cols]
+                    if len(cols) == 2:
+                        fresh.stops[1] = (1.0, cols[1])
+                else:  # gradient: spread the old colours evenly
+                    n = len(kept) if len(kept) > 1 else 2
+                    cols = kept if len(kept) > 1 else kept * 2
+                    fresh.stops = [(i / (n - 1), c) for i, c in enumerate(cols)]
+            if old and old.kind in LOOPING and kind in LOOPING:
+                fresh.duration_ms = old.duration_ms
             fresh.brightness = old.brightness if old else 10
             self.layer.effect = fresh
             self._select(self.list.currentRow())
@@ -333,9 +364,14 @@ class LightingTab(QWidget):
         e.stops.sort(key=lambda s: s[0])
         self._edited(True)
 
+    def _reverse_edited(self, on: bool) -> None:
+        if self.layer and self.layer.effect and not self.loading:
+            self.layer.effect.params["reverse"] = on
+            self._edited()
+
     def _add_stop(self) -> None:
         e = self.layer.effect
-        if e.kind == "StaticLighting":
+        if e.kind in COLOR_COUNT:
             return
         last_t, last_c = e.stops[-1]
         e.stops.append((min(last_t + (10.0 if e.kind == "TemperatureLighting" else 0.1), 100.0 if e.kind == "TemperatureLighting" else 1.0), last_c))

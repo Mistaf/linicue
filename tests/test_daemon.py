@@ -130,7 +130,7 @@ class DaemonTests(unittest.TestCase):
         d, _, ctl = make(profile("Default", initial=True))
         d.start()
         d.stop()
-        self.assertEqual(ctl.sent, [nxp.special_mode(True), nxp.special_mode(False), nxp.lighting_control(False)])
+        self.assertEqual(ctl.sent, [nxp.special_mode(True), nxp.angle_snapping(False, 5), nxp.special_mode(False), nxp.lighting_control(False)])
 
 
 if __name__ == "__main__":

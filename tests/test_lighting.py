@@ -32,7 +32,54 @@ class EffectTests(unittest.TestCase):
 
     def test_brightness_scales_and_unknown_kind_is_none(self):
         self.assertEqual(effect_color(eff("StaticLighting", [(0, (200, 100, 50))], brightness=5), 0, None), (100, 50, 25))
-        self.assertIsNone(effect_color(eff("RainbowLighting", [(0, (0, 0, 0))]), 0, None))
+        self.assertIsNone(effect_color(eff("SomethingNew", [(0, (0, 0, 0))]), 0, None))
+
+
+RED, BLUE = (255, 0, 0), (0, 0, 255)
+red, blue = Color(1, 0, 0), Color(0, 0, 1)
+
+
+class AnimatedEffectTests(unittest.TestCase):
+    def at(self, kind, stops, t, zone=0, **params):
+        e = Effect(kind, 1000, 10, list(stops), params)
+        return effect_color(e, t, None, zone, 5)
+
+    def test_rainbow_cycles_hue_over_the_loop(self):
+        self.assertEqual(self.at("RainbowLighting", [], 0), RED)
+        r, g, b = self.at("RainbowLighting", [], 333)  # a third of the way: green
+        self.assertTrue(g == 255 and r <= 2 and b <= 2)
+        self.assertEqual(self.at("RainbowLighting", [], 1000), RED)  # loops
+
+    def test_rainbow_wave_offsets_each_zone_and_can_reverse(self):
+        a, b = self.at("RainbowWaveLighting", [], 0, 0), self.at("RainbowWaveLighting", [], 0, 1)
+        self.assertNotEqual(a, b)
+        fwd = self.at("RainbowWaveLighting", [], 0, 1)
+        rev = self.at("RainbowWaveLighting", [], 0, 1, reverse=True)
+        self.assertNotEqual(fwd, rev)
+
+    def test_pulse_fades_dark_to_full_and_back(self):
+        s = [(0, red)]
+        self.assertEqual([self.at("SingleColorPulseLighting", s, t) for t in (0, 500, 1000)], [(0, 0, 0), RED, (0, 0, 0)])
+
+    def test_blink_alternates_between_two_colours(self):
+        s = [(0, red), (1, blue)]
+        self.assertEqual([self.at("BlinkLighting", s, t) for t in (0, 499, 500, 999)], [RED, RED, BLUE, BLUE])
+        self.assertEqual(self.at("BlinkLighting", [(0, red)], 700), RED)  # one colour only: no crash
+
+    def test_visor_sweeps_out_and_back_across_the_zones(self):
+        lit = lambda t: [z for z in range(5) if self.at("SingleColorVisorLighting", [(0, red)], t, z) != (0, 0, 0)]
+        self.assertEqual(lit(0), [0])
+        self.assertEqual(lit(500), [4])
+        self.assertEqual(lit(1000), [0])
+
+    def test_colour_effects_without_a_colour_are_skipped_not_crashing(self):
+        self.assertIsNone(self.at("SingleColorPulseLighting", [], 0))
+        self.assertIsNone(self.at("SomethingNew", [(0, red)], 0))
+
+    def test_render_gives_each_zone_its_own_position_in_a_wave(self):
+        layer = LightingLayer("w", "id", ALL, True, Effect("RainbowWaveLighting", 1000, 10, [], {}))
+        frame = render([layer], 0)
+        self.assertEqual(len(set(frame.values())), 5)  # five different colours across five LEDs
 
 
 class RenderTests(unittest.TestCase):

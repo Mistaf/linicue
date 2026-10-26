@@ -120,6 +120,48 @@ class GuiTests(unittest.TestCase):
         t._remove()
         self.assertEqual(len(t.layers), 1)
 
+    def test_every_new_effect_type_can_be_added_saved_and_rendered(self):
+        from linicue.gui.lighting_tab import COLOR_COUNT, KINDS
+        from linicue.lighting import render
+        t = self.w.lighting
+        for kind in KINDS:
+            t._add(kind)
+            e = t.layers[0].effect
+            self.assertEqual(e.kind, kind)
+            if kind in COLOR_COUNT:
+                self.assertEqual(len(e.stops), COLOR_COUNT[kind], kind)
+        self.w.save_now()
+        saved = self.saved("Alpha")
+        self.assertEqual([l.effect.kind for l in saved.mouse.lighting[:len(KINDS)]], list(reversed(list(KINDS))))
+        for l in saved.mouse.lighting[:len(KINDS)]:
+            self.assertTrue(render([l], 300, 40), l.effect.kind)  # nothing is skipped as unsupported
+
+    def test_colourless_effects_hide_the_colour_table_and_wave_has_a_reverse_option(self):
+        t = self.w.lighting
+        t._add("RainbowWaveLighting")
+        self.assertTrue(t.stops.isHidden() and t.add_stop_btn.isHidden() and not t.reverse.isHidden())
+        t.reverse.setChecked(True)
+        self.w.save_now()
+        self.assertTrue(self.saved("Alpha").mouse.lighting[0].effect.params["reverse"])
+        t._add("BlinkLighting")
+        self.assertFalse(t.stops.isHidden())
+        self.assertTrue(t.add_stop_btn.isHidden() and t.reverse.isHidden())  # fixed two colours
+
+    def test_changing_effect_keeps_the_colours_and_loop_length(self):
+        from linicue.profile import Color
+        t = self.w.lighting
+        t._add("GradientLighting")
+        t.layers[0].effect.stops = [(0.0, Color(1, 0, 0)), (0.5, Color(0, 1, 0)), (1.0, Color(0, 0, 1))]
+        t.layers[0].effect.duration_ms = 7000
+        t.kind.setCurrentIndex(t.kind.findData("BlinkLighting"))
+        t._kind_edited(0)
+        e = t.layers[0].effect
+        self.assertEqual([c for _, c in e.stops], [Color(1, 0, 0), Color(0, 1, 0)])  # first two colours carried over
+        self.assertEqual(e.duration_ms, 7000)
+        t.kind.setCurrentIndex(t.kind.findData("GradientLighting"))
+        t._kind_edited(0)
+        self.assertEqual([round(p, 2) for p, _ in t.layers[0].effect.stops], [0.0, 1.0])
+
     def test_gradient_stops_add_move_remove(self):
         t = self.w.lighting
         t._add("GradientLighting")
@@ -134,13 +176,57 @@ class GuiTests(unittest.TestCase):
     # --- DPI -------------------------------------------------------------------------------
     def test_dpi_edit_saves_presets_file(self):
         d = self.w.dpi
-        d.rows["2"][2].setValue(2600)
-        d.rows["4"][1].setChecked(True)
+        d.rows["2"]["x"].setValue(2600)
+        d.rows["4"]["on"].setChecked(True)
         d.default.setCurrentIndex(2)
         d._default_edited(2)
         self.w.save_now()
         raw = store.load_raw_presets(self.root)["{preset}"]
         self.assertEqual((raw["stages"]["2"]["dpi"], raw["stages"]["4"]["enabled"], raw["default"]), ([2600, 2600], True, 3))
+
+    def test_dpi_y_follows_x_until_separate_y_is_ticked(self):
+        d = self.w.dpi
+        row = d.rows["2"]
+        row["x"].setValue(2000)
+        self.assertEqual((row["y"].value(), row["y"].isEnabled()), (2000, False))
+        row["sep"].setChecked(True)
+        self.assertTrue(row["y"].isEnabled())
+        row["x"].setValue(2200)  # Y no longer follows
+        row["y"].setValue(1800)
+        self.w.save_now()
+        self.assertEqual(store.load_raw_presets(self.root)["{preset}"]["stages"]["2"]["dpi"], [2200, 1800])
+        row["sep"].setChecked(False)  # back to linked: Y snaps to X
+        self.assertEqual(d.preset["stages"]["2"]["dpi"], [2200, 2200])
+        self.assertEqual(row["y"].value(), 2200)
+
+    def test_separate_y_shows_when_a_stored_preset_has_different_values(self):
+        d = self.w.dpi
+        d.preset["stages"]["3"]["dpi"] = [3000, 2500]
+        d.refill()
+        self.assertTrue(d.rows["3"]["sep"].isChecked() and d.rows["3"]["y"].isEnabled())
+        self.assertFalse(d.rows["1"]["sep"].isChecked())
+
+    def test_mouse_tab_angle_snapping_is_per_profile_and_saved(self):
+        t = self.w.mouse
+        self.assertFalse(t.snap.isChecked())
+        t.snap.setChecked(True)
+        self.w.save_now()
+        self.assertTrue(self.saved("Alpha").mouse.angle_snapping)
+        self.assertEqual(self.saved("Alpha").mouse.angle_snapping_value, 5)
+        self.select("Beta")
+        self.assertFalse(t.snap.isChecked())  # the other profile is untouched
+
+    def test_mouse_tab_polling_rate_saves_to_settings_and_can_be_cleared(self):
+        t = self.w.mouse
+        self.assertIsNone(t.rate.currentData())  # default: leave as it is
+        t.rate.setCurrentIndex(t.rate.findData(500))
+        t._rate_edited()
+        self.w.save_now()
+        self.assertEqual(store.load_settings(self.root), {"polling_rate_hz": 500})
+        t.rate.setCurrentIndex(t.rate.findData(None))
+        t._rate_edited()
+        self.w.save_now()
+        self.assertEqual(store.load_settings(self.root), {})
 
     def test_dpi_new_preset_is_assigned_to_the_profile(self):
         self.w.dpi._new_preset()
@@ -278,6 +364,48 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(KeyStream.name_for(30 + 8), "A")  # KEY_A = 30, Qt scancode = evdev + 8
         self.assertEqual(KeyStream.name_for(43 + 8), "Backslash")
         self.assertIsNone(KeyStream.name_for(0))
+
+    def test_launch_action_run_and_open(self):
+        from linicue.gui.buttons_tab import describe
+        dlg = self.make_dialog()
+        dlg.kind.setCurrentIndex(dlg.LAUNCH)
+        self.assertIsNone(dlg.result_action())  # nothing typed yet
+        dlg.launch_target.setText("firefox --new-window")
+        a = dlg.result_action()
+        self.assertEqual((a.type, a.path, a.url), ("LaunchApplicationAction", "firefox --new-window", ""))
+        self.assertEqual(describe(a), "Run: firefox --new-window")
+        dlg.launch_mode.setCurrentIndex(1)
+        dlg.launch_target.setText("https://example.org")
+        b = dlg.result_action()
+        self.assertEqual((b.path, b.url), ("", "https://example.org"))
+        self.assertEqual(describe(b), "Open: https://example.org")
+        self.w.buttons.set_action("MouseG3", a)
+        self.w.save_now()
+        self.assertEqual(self.saved("Alpha").mouse.binding("MouseG3").action.path, "firefox --new-window")
+
+    def test_imported_windows_launch_action_shows_a_warning_not_a_command(self):
+        from linicue.gui.buttons_tab import describe, make_action
+        from linicue.profile import LaunchAction
+        a = make_action(LaunchAction, "LaunchApplicationAction", "Launch", path="C:\\Games\\run.bat", url="", predefined=5)
+        self.assertIn("Windows path", describe(a))
+        dlg = self.make_dialog(a)
+        self.assertEqual(dlg.kind.currentIndex(), dlg.LAUNCH)
+        self.assertIn("Windows path", dlg.launch_note.text())
+        dlg.launch_target.setText("/usr/bin/true")
+        self.assertEqual(dlg.launch_note.text(), "")
+
+    def test_macro_mouse_clicks_can_be_added_and_changed(self):
+        from linicue.gui.buttons_tab import MOUSE_BUTTONS
+        dlg = self.make_dialog()
+        dlg.kind.setCurrentIndex(dlg.MACRO)
+        ed = dlg.macro_editor
+        ed.click_button.setCurrentIndex(ed.click_button.findData(2))
+        ed._add_click(ed.click_button.currentData())
+        self.assertEqual([(e.kind, e.pressed, e.button) for e in dlg.macro.events if e.kind == "mouse"], [("mouse", True, 2), ("mouse", False, 2)])
+        self.assertEqual(ed.table.item(0, 1).text(), MOUSE_BUTTONS[2])
+        ed.table.cellWidget(0, 1).setCurrentIndex(0)  # the press row: change the button to Left
+        self.assertEqual(dlg.macro.events[0].button, 1)
+        self.assertIsNotNone(dlg.result_action())
 
     def test_existing_actions_round_trip_through_the_dialog(self):
         from linicue.gui.buttons_tab import describe

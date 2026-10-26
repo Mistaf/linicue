@@ -14,6 +14,16 @@ def _exe(path: str) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] in (["--version"], ["version"]):
+        from . import __version__
+        print(f"linicue {__version__}")
+        return 0
+    if argv[:1] == ["probe"]:
+        from .probe import main as probe_main
+        return probe_main(argv[1:])
+    if argv[:1] == ["pollrate"]:
+        from .pollrate import main as pollrate_main
+        return pollrate_main(argv[1:])
     if argv[:1] in (["install"], ["uninstall"]):
         from .install import main as install_main
         return install_main(argv[1:], uninstall=argv[0] == "uninstall")

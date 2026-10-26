@@ -211,8 +211,10 @@ def _effect(n: Any) -> Effect | None:
     src = n
     if isinstance(n.get("value0"), dict):  # base class written as value0 (SingleColorWaveLighting)
         src = {**n["value0"], **{k: v for k, v in n.items() if k != "value0"}}
-    params = {k: v for k, v in src.items() if k not in ("name", "duration", "brightness", "transitions", "value0", "impl")}
+    params = {k: v for k, v in src.items() if k not in ("name", "duration", "brightness", "transitions", "value0", "impl", "color1", "color2")}
     stops = [(float(t["time"]), Color.parse(t["color"])) for t in src.get("transitions") or []]
+    if "color1" in src:  # BlinkLighting
+        stops = [(0.0, Color.parse(src["color1"])), (1.0, Color.parse(src["color2"]))]
     if n.type == "TemperatureLighting" and isinstance(src.get("impl"), dict):
         impl = src["impl"]
         params["sensor"] = impl.get("sensorId")

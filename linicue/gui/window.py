@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 720)
         self.profiles, _ = store.load_store(root)
         self.presets = store.load_raw_presets(root)
+        self.settings = store.load_settings(root)
         self.current: Profile | None = None
         self.daemon = Daemon()
         self.saver = QTimer(singleShot=True, interval=SAVE_DELAY_MS)
@@ -112,6 +113,10 @@ class MainWindow(QMainWindow):
         self.dpi = DpiTab(self.presets)
         self.dpi.presetsChanged.connect(self.touch_presets)
         self.editors.insert(1, ("DPI", self.dpi))
+        from .mouse_tab import MouseTab
+        self.mouse = MouseTab(self.settings)
+        self.mouse.settingsChanged.connect(self.touch_settings)
+        self.editors.insert(2, ("Mouse", self.mouse))
         from .buttons_tab import ButtonsTab
         self.buttons = ButtonsTab(lambda: self.profiles)
         self.editors.insert(0, ("Buttons", self.buttons))
@@ -196,6 +201,10 @@ class MainWindow(QMainWindow):
     def touch(self) -> None:
         self.saver.start()
 
+    def touch_settings(self) -> None:
+        self.settings_dirty = True
+        self.saver.start()
+
     def touch_presets(self) -> None:
         self.presets_dirty = True
         self.saver.start()
@@ -208,6 +217,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "presets_dirty", False):
             store.save_presets(self.presets, self.root)
             self.presets_dirty = False
+        if getattr(self, "settings_dirty", False):
+            store.save_settings(self.settings, self.root)
+            self.settings_dirty = False
 
     def _preview_toggled(self, on: bool) -> None:
         self.save_now()

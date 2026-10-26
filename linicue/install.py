@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent  # what to put on PYTHONPATH: the source folder, or site-packages when installed
+DATA = Path(__file__).resolve().parent / "data"  # KWin script, udev rule and example config travel with the package
 KWIN_ID = "linicue-windowwatcher"
 UDEV_RULE = Path("/etc/udev/rules.d/70-linicue.rules")
 
@@ -20,7 +21,6 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-WorkingDirectory={root}
 Environment=PYTHONPATH={root}
 ExecStart={python} -m linicue run
 Restart=on-failure
@@ -46,8 +46,9 @@ Categories=Settings;HardwareSettings;
 class Installer:
     def __init__(self, home: Path = Path.home(), python: str = sys.executable, root: Path = ROOT, dry_run: bool = False,
                  runner: Callable[[list[str]], tuple[int, str]] | None = None, say: Callable[[str], None] = print,
-                 which: Callable[[str], str | None] = shutil.which):
+                 which: Callable[[str], str | None] = shutil.which, data: Path = DATA):
         self.home, self.python, self.root, self.dry, self.say, self.which = home, python, root, dry_run, say, which
+        self.data = data
         self.runner = runner or self._run
         self.unit = home / ".config/systemd/user/linicue.service"
         self.desktop = home / ".local/share/applications/linicue.desktop"
@@ -74,15 +75,21 @@ class Installer:
                 self.say(f"note: {pip} is not installed for {self.python}; run: {self.python} -m pip install {pip}")
         self.write(self.unit, unit_text(self.python, self.root))
         self.write(self.desktop, desktop_text(self.python, self.root))
+        rules = self.home / ".config/linicue/rules.toml"  # the example is all comments, so it changes nothing until edited
+        if rules.exists():
+            self.say(f"keep  {rules} (already there)")
+        else:
+            self.write(rules, (self.data / "rules.example.toml").read_text())
         self._kwin_install()
         if self.which("systemctl"):
             self.say("note: close any `linicue run` still open in a terminal first, or two copies will fight over the mouse")
             self.cmd("systemctl", "--user", "daemon-reload")
-            self.cmd("systemctl", "--user", "enable", "--now", "linicue.service")
+            self.cmd("systemctl", "--user", "enable", "linicue.service")
+            self.cmd("systemctl", "--user", "restart", "linicue.service")  # also picks up a changed service file or new code
         else:
             self.say("systemctl not found: start it yourself with `python -m linicue run`")
         if not UDEV_RULE.exists():
-            self.say(f"\nOne step needs root. Run this once, then replug the mouse:\n  sudo cp {self.root}/udev/70-linicue.rules /etc/udev/rules.d/ "
+            self.say(f"\nOne step needs root. Run this once, then replug the mouse:\n  sudo cp {self.data}/udev/70-linicue.rules /etc/udev/rules.d/ "
                      "&& sudo udevadm control --reload && sudo udevadm trigger")
         self.say("\nDone. Open “linicue” from the application menu, or run: " f"{self.python} -m linicue gui")
 
@@ -90,7 +97,7 @@ class Installer:
         if not self.which("kpackagetool6"):
             self.say("kpackagetool6 not found: install the KWin script by hand (see README)")
             return
-        src = str(self.root / "kwin" / KWIN_ID)
+        src = str(self.data / "kwin" / KWIN_ID)
         _, listing = self.cmd("kpackagetool6", "--type=KWin/Script", "--list")
         self.cmd("kpackagetool6", "--type=KWin/Script", "--upgrade" if KWIN_ID in listing else "--install", src)
         self.cmd("kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", f"{KWIN_ID}Enabled", "true")

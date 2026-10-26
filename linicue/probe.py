@@ -1,7 +1,7 @@
 """Read-only probe for the Scimitar RGB Elite (1b1c:1b8b).  Sends nothing to the device.
 
-    sudo python3 tools/probe.py            # list its input/hidraw interfaces and HID report descriptors
-    sudo python3 tools/probe.py --watch    # also log events while you press buttons (Ctrl-C to stop)
+    sudo linicue probe            # list its input/hidraw interfaces and HID report descriptors
+    sudo linicue probe --watch    # also log events while you press buttons (Ctrl-C to stop)
 
 Everything is also written to probe-output.txt (or --out FILE); send that file back so the
 button map can be built from facts.
@@ -41,8 +41,9 @@ def hidraw_nodes():
     return sorted(out)
 
 
-def main():
-    path = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else "probe-output.txt"
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    path = argv[argv.index("--out") + 1] if "--out" in argv else "probe-output.txt"
     out = open(path, "w")
 
     def log(line, echo=True):
@@ -59,7 +60,7 @@ def main():
         log(f"input  /dev/input/{n}  name={name!r} phys={phys}")
     for n, desc in raws:
         log(f"hidraw /dev/{n}  report descriptor ({len(desc)} bytes): {desc.hex()}")
-    if "--watch" not in sys.argv:
+    if "--watch" not in argv:
         print(f"saved to {path}")
         return 0
     fds = {}

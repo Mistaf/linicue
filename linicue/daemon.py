@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import signal
 import sys
 import time
@@ -19,6 +20,7 @@ from .switcher import Match, Overrides, RuleSet, Switcher, load_overrides, windo
 
 FRAME_SECONDS = 1 / 30
 TEMP_REFRESH = 2.0
+POLLING_HZ = (125, 250, 500, 1000)
 SETTLE = 0.25  # the mouse drops colour packets sent right after the mode switch
 KEEPALIVE = 1.0  # resend an unchanged frame this often: a static profile is otherwise sent once and can be lost
 
@@ -39,10 +41,15 @@ class LogSink:
 class Daemon:
     def __init__(self, profiles: list[Profile], rules: RuleSet, sink, control: nxp.ControlChannel | None,
                  skip_leds: frozenset[str] = frozenset(), log: Callable[[str], None] = print, dpi: Dpi | None = None,
-                 presets: dict[str, Preset] | None = None, dry: bool = False):
+                 presets: dict[str, Preset] | None = None, dry: bool = False, settings: dict | None = None,
+                 state_path: Path | None = None):
         self.profiles, self.control, self.skip, self.log, self.dpi = profiles, control, skip_leds, log, dpi
         self.presets, self.started = presets or {}, False
         self.dry = dry  # log what would be sent instead of writing to the mouse
+        self.settings = settings or {}
+        self.state_path = state_path  # what was last written to the mouse (polling rate); it survives restarts
+        self.state = json.loads(state_path.read_text()) if state_path and state_path.is_file() else {}
+        self.snap_sent: tuple | None = None
         self.on_link_lost: Callable[[Exception], None] = lambda e: None  # set by MouseLink
         self.forced: Profile | None = None  # set by the GUI to preview a profile; window focus is ignored meanwhile
         self.player = Player(sink, on_switch=self.switch_profile, log=log,
@@ -75,6 +82,7 @@ class Daemon:
         self.layers = [dataclasses.replace(l, leds=tuple(x for x in l.leds if x not in self.skip))
                        for l in profile.mouse.lighting]
         self.t0, self.last_frame = time.monotonic(), None
+        self.apply_snapping()
         self.log(f"profile -> {profile.name}" + (f"  ({match.reason})" if match and match.score else ""))
 
     def on_window(self, resource_class: str, resource_name: str, desktop_file: str, caption: str, pid: int) -> None:
@@ -96,9 +104,12 @@ class Daemon:
             self._apply(target, None)
         return True
 
-    def reload(self, profiles: list[Profile], rules: RuleSet, presets: dict[str, Preset]) -> None:
+    def reload(self, profiles: list[Profile], rules: RuleSet, presets: dict[str, Preset], settings: dict | None = None) -> None:
         """Swap in freshly loaded profiles (the GUI saved something); keep the profile in use if it still exists."""
         self.profiles, self.presets, self.switcher.rules = profiles, presets, rules
+        if settings is not None:
+            self.settings = settings
+            self.apply_polling()
         keep = lambda pid: next((p for p in profiles if p.id == pid), None)
         self.forced = keep(self.forced.id) if self.forced else None
         target = self.forced or keep(self.profile.id if self.profile else "") or rules.default
@@ -130,6 +141,29 @@ class Daemon:
             self.player.button(name, b.action, pressed)
         except Exception as e:  # one bad binding must not kill the daemon
             self.log(f"{name}: {type(e).__name__}: {e}")
+
+    def apply_snapping(self) -> None:
+        """Angle snapping belongs to the profile; send it when it changes (and again after a reconnect)."""
+        m = self.profile.mouse if self.profile else None
+        if not m or not self.started:
+            return
+        want = (bool(m.angle_snapping), m.angle_snapping_value or 5)
+        if want != self.snap_sent:
+            self.snap_sent = want
+            self.send(nxp.angle_snapping(*want))
+
+    def apply_polling(self) -> None:
+        """Polling rate is a device setting. The mouse re-enumerates after it changes, so write it only when the chosen
+        rate differs from the one last written (recorded first): a reconnect must not trigger another write."""
+        hz = self.settings.get("polling_rate_hz")
+        if not self.started or hz not in POLLING_HZ or hz == self.state.get("polling_rate_hz"):
+            return
+        self.state["polling_rate_hz"] = hz
+        if self.state_path and not self.dry:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(self.state))
+        self.log(f"polling rate -> {hz} Hz (the mouse will reconnect)")
+        self.send(nxp.polling_rate(hz))
 
     def send(self, pkt: bytes) -> None:
         """Every write to the mouse goes through here: a vanished device is reported, never raised."""
@@ -174,6 +208,9 @@ class Daemon:
         self.send(nxp.special_mode(True))  # also stops the mouse handling DPI/sniper itself
         if self.dpi:
             self.dpi.setup()
+        self.snap_sent = None  # a (re)connected mouse has forgotten it
+        self.apply_snapping()
+        self.apply_polling()  # last: the mouse reconnects after this
 
     def stop(self) -> None:
         self.player.release_all()
@@ -208,7 +245,7 @@ def _source(args: list[str], overrides: Overrides):
             colors = [tuple(int(c[i:i + 2], 16) for i in (0, 2, 4)) for c in overrides.dpi_colors]
             presets = {p.mouse.dpi_ref: manual_preset(list(overrides.dpi_stages), overrides.dpi_sniper, overrides.dpi_start, colors)
                        for p in profiles if p.mouse}
-        return profiles, RuleSet(profiles, steam, overrides), presets
+        return profiles, RuleSet(profiles, steam, overrides), presets, store.load_settings()
 
     return rebuild, (None if folder else store.CONFIG_DIR)
 
@@ -232,7 +269,7 @@ async def run(args: list[str]) -> int:
     cfg = Path(args[args.index("--config") + 1]) if "--config" in args else store.CONFIG_DIR / "rules.toml"
     overrides = load_overrides(cfg) if cfg.is_file() else Overrides()
     rebuild, watch_root = _source(args, overrides)
-    profiles, rules, presets = rebuild()
+    profiles, rules, presets, settings = rebuild()
     if not profiles:
         print("no profiles: run `python -m linicue import <iCUE profiles folder>` first, or pass that folder to `run`", file=sys.stderr)
         return 1
@@ -243,7 +280,8 @@ async def run(args: list[str]) -> int:
     if not presets:
         dpi = None
         log("no DPI settings found: DPI and Sniper buttons do nothing (see README)")
-    d = Daemon(profiles, rules, LogSink(log) if dry else UInputSink(), None, overrides.skip_leds, log, dpi, presets, dry)
+    d = Daemon(profiles, rules, LogSink(log) if dry else UInputSink(), None, overrides.skip_leds, log, dpi, presets, dry, settings,
+               store.CONFIG_DIR / "state.json")
     if dpi and dpi.preset is None:  # the starting profile may not name a preset: use the first one
         dpi.configure(next(iter(presets.values())))
     if "--profile" in args:
@@ -268,6 +306,9 @@ async def run(args: list[str]) -> int:
             tasks.append(asyncio.create_task(_guard(watch_sleep(link.resumed), log, "suspend/resume watch")))
         except ImportError:
             log("dbus-next not installed: window-based profile switching is off (pip install dbus-next)")
+    code = Path(__file__).parent
+    from . import __version__
+    log(f"linicue {__version__} from {code} (newest file changed {time.strftime('%Y-%m-%d %H:%M', time.localtime(max(f.stat().st_mtime for f in code.rglob('*.py'))))})")
     log("running; Ctrl-C to stop" + ("  [dry run: no writes to the mouse, no key output]" if dry else ""))
     try:
         await stop.wait()

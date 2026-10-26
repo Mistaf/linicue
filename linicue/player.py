@@ -9,13 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
+import shlex
 import struct
+import subprocess
 from typing import Callable, Protocol
 
 from . import evcodes as ev
 from . import keys
 from .profile import (Action, KeyRemapAction, LaunchAction, MacroAction, MediaAction, ProfileSwitchAction,
                       TextAction)
+
+
+_WINDOWS_PATH = re.compile(r'^\s*"?[A-Za-z]:[\\/]|^\s*\\\\')
+
+
+def looks_windows(text: str) -> bool:
+    """``C:\\Games\\x.exe`` or ``\\\\server\\share``: imported from iCUE, can never run on Linux."""
+    return bool(_WINDOWS_PATH.match(text))
+
+
+def _spawn(*argv: str):
+    return asyncio.create_subprocess_exec(*argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 class Sink(Protocol):
@@ -26,8 +42,9 @@ class Sink(Protocol):
 class Player:
     def __init__(self, sink: Sink, on_switch: Callable[[ProfileSwitchAction], None] = lambda a: None,
                  sleep=asyncio.sleep, log: Callable[[str], None] = lambda m: None,
-                 on_dpi: Callable[[int, bool], None] = lambda fn, down: None):
+                 on_dpi: Callable[[int, bool], None] = lambda fn, down: None, spawn=_spawn):
         self.sink, self.on_switch, self.sleep, self.log, self.on_dpi = sink, on_switch, sleep, log, on_dpi
+        self.spawn = spawn  # starts a program; replaceable for tests
         self.tasks: dict[str, asyncio.Task] = {}  # button -> running macro
         self.held: dict[str, list[int]] = {}  # button -> codes this button holds down
         self.toggled: set[str] = set()
@@ -84,9 +101,31 @@ class Player:
         elif isinstance(a, TextAction):
             asyncio.ensure_future(self._type(a))
         elif isinstance(a, LaunchAction):
-            self.log(f"skipped launch action {a.name!r}: Windows path {a.path!r}")
+            self._launch_action(a)
         else:
             self.log(f"unsupported action {a.type}")
+
+    def _launch_action(self, a: LaunchAction) -> None:
+        """Run a program (command line) or open an address/file with xdg-open. Windows paths from iCUE are skipped."""
+        target = a.path or a.url
+        if not target:
+            return
+        if looks_windows(target):
+            self.log(f"skipped launch action {a.name!r}: {target!r} is a Windows path")
+            return
+        try:
+            argv = shlex.split(target) if a.path else ["xdg-open", target]
+        except ValueError as e:
+            self.log(f"launch action {a.name!r}: cannot read the command ({e})")
+            return
+        asyncio.ensure_future(self._launch(argv))
+
+    async def _launch(self, argv: list[str]) -> None:
+        try:
+            proc = await self.spawn(*argv)
+            await proc.wait()  # reaps the child so it never lingers as a zombie
+        except OSError as e:
+            self.log(f"launch failed: {argv[0]}: {e}")
 
     async def _type(self, a: TextAction) -> None:
         for ch in a.text:

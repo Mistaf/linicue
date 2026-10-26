@@ -126,6 +126,16 @@ def load_raw_presets(root: Path = CONFIG_DIR) -> dict[str, dict]:
     return json.loads(f.read_text())["presets"] if f.is_file() else {}
 
 
+def load_settings(root: Path = CONFIG_DIR) -> dict:
+    """Device-wide settings (not per profile), e.g. {"polling_rate_hz": 1000}; missing file = nothing chosen."""
+    f = root / "settings.json"
+    return {k: v for k, v in json.loads(f.read_text()).items() if k != "version"} if f.is_file() else {}
+
+
+def save_settings(settings: dict, root: Path = CONFIG_DIR) -> None:
+    _write_atomic(root / "settings.json", {"version": VERSION, **settings})
+
+
 def load_store(root: Path = CONFIG_DIR) -> tuple[list[Profile], dict[str, Preset]]:
     profiles = []
     for f in sorted((root / "profiles").glob("*.json")):
@@ -135,7 +145,7 @@ def load_store(root: Path = CONFIG_DIR) -> tuple[list[Profile], dict[str, Preset
 
 def stamp(root: Path = CONFIG_DIR) -> float:
     """Newest modification time in the store: the daemon reloads when this changes."""
-    files = [*(root / "profiles").glob("*.json"), root / "dpi.json"]
+    files = [*(root / "profiles").glob("*.json"), root / "dpi.json", root / "settings.json"]
     return max((f.stat().st_mtime for f in files if f.exists()), default=0.0)
 
 

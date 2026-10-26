@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linicue"
+dynamic = ["version"]
+description = "Linux replacement for Corsair iCUE on the Scimitar RGB Elite: profiles, lighting, macros and DPI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["dbus-next"]
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials"]
+
+[project.scripts]
+linicue = "linicue.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "linicue.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["linicue*"]
+
+[tool.setuptools.package-data]
+linicue = ["data/**/*"]

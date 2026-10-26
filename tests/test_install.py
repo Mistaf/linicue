@@ -32,9 +32,19 @@ class InstallTests(unittest.TestCase):
         r.inst.install()
         self.assertTrue(r.inst.unit.is_file() and r.inst.desktop.is_file())
         names = [c[0] for c in r.ran]
-        self.assertEqual(names, ["kpackagetool6", "kpackagetool6", "kwriteconfig6", "busctl", "systemctl", "systemctl"])
+        self.assertEqual(names, ["kpackagetool6", "kpackagetool6", "kwriteconfig6", "busctl", "systemctl", "systemctl", "systemctl"])
         self.assertIn("--install", r.ran[1])  # not installed yet
-        self.assertEqual(r.ran[-1][-2:], ["--now", "linicue.service"])
+        self.assertEqual(r.ran[-1][-2:], ["restart", "linicue.service"])  # restart, so a re-install loads the new code
+        r.tmp.cleanup()
+
+    def test_example_config_is_installed_once_and_never_overwritten(self):
+        r = Rig()
+        rules = r.home / ".config/linicue/rules.toml"
+        r.inst.install()
+        self.assertIn("[steam]", rules.read_text())
+        rules.write_text("# my edits\n")
+        r.inst.install()
+        self.assertEqual(rules.read_text(), "# my edits\n")
         r.tmp.cleanup()
 
     def test_upgrades_the_kwin_script_when_already_installed(self):

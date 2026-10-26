@@ -13,8 +13,9 @@ REPORT_LEN = 64
 CMD_SET = 0x07
 FIELD_SPECIAL = 0x04  # button handling: hardware vs software
 FIELD_LIGHTING = 0x05  # lighting control: hardware vs software + hardware brightness level 0..3
+FIELD_POLLRATE = 0x0A  # polling interval in ms at payload[4]; the mouse re-enumerates on USB afterwards
 FIELD_MOUSE = 0x13  # mouse subcommands
-MOUSE_DPI, MOUSE_DPIMASK, MOUSE_DPIPROF = 0x02, 0x05, 0xD0  # current stage / enabled-stage bitmask / stage values (|stage)
+MOUSE_DPI, MOUSE_SNAP, MOUSE_DPIMASK, MOUSE_DPIPROF = 0x02, 0x04, 0x05, 0xD0  # current stage / enabled-stage bitmask / stage values (|stage)
 FIELD_M_COLOR = 0x22  # per-zone colours
 MODE_HARDWARE, MODE_SOFTWARE = 0x01, 0x02
 MAX_ZONES = 15  # 4 header bytes + 4 bytes per zone must fit in 64
@@ -34,6 +35,22 @@ def lighting_control(software: bool, level: int = 3) -> bytes:
     if not 0 <= level <= 3:
         raise ValueError("hardware brightness level is 0..3")
     return _pad(CMD_SET, FIELD_LIGHTING, MODE_SOFTWARE if software else MODE_HARDWARE, 0, level)
+
+
+POLLING_MS = {125: 8, 250: 4, 500: 2, 1000: 1}  # Hz -> interval, the table iCUE uses
+
+
+def polling_rate(hz: int) -> bytes:
+    if hz not in POLLING_MS:
+        raise ValueError(f"polling rate must be one of {sorted(POLLING_MS)} Hz")
+    return _pad(CMD_SET, FIELD_POLLRATE, 0, 0, POLLING_MS[hz])
+
+
+def angle_snapping(enabled: bool, angle: int = 5) -> bytes:
+    """`07 13 04 00 <enabled> <angle>`; byte 3 = 0 is a live change (1 would save it in the mouse)."""
+    if not 0 <= angle <= 255:
+        raise ValueError("angle is one byte")
+    return _pad(CMD_SET, FIELD_MOUSE, MOUSE_SNAP, 0, int(enabled), angle)
 
 
 def dpi_stage(stage: int, x: int, y: int | None = None) -> bytes:

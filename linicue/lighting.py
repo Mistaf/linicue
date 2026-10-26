@@ -1,7 +1,9 @@
 """Render a profile's mouse lighting layers into per-zone colours."""
 from __future__ import annotations
 
+import colorsys
 import glob
+import math
 import time
 from pathlib import Path
 
@@ -22,21 +24,41 @@ def _lerp(stops: list[tuple[float, Color]], x: float) -> Color:
     return stops[-1][1]
 
 
-def effect_color(e: Effect, t_ms: float, temp_c: float | None) -> RGB | None:
-    """None when the effect type is not supported yet."""
-    if not e.stops:
+def _scaled(c: Color, k: float) -> Color:
+    return Color(c.r * k, c.g * k, c.b * k)
+
+
+def effect_color(e: Effect, t_ms: float, temp_c: float | None, zone: int = 0, zones: int = 1) -> RGB | None:
+    """Colour of one LED (`zone` of `zones`, counted from 0) at time t; None for an effect type that is not supported.
+
+    shortcut: the animated effects (pulse, blink, visor, rainbow, wave) are plain approximations of iCUE's, driven by
+    the loop length only; iCUE's own "speed" values are not interpreted."""
+    kind = e.kind
+    phase = (t_ms % e.duration_ms) / e.duration_ms if e.duration_ms else 0.0  # 0..1 through one loop
+    if kind == "RainbowLighting":
+        c = Color(*colorsys.hsv_to_rgb(phase, 1.0, 1.0))
+    elif kind == "RainbowWaveLighting":
+        offset = (zone / max(zones, 1)) * (-1 if e.params.get("reverse") else 1)
+        c = Color(*colorsys.hsv_to_rgb((phase + offset) % 1.0, 1.0, 1.0))
+    elif not e.stops:
         return None
-    if e.kind in ("StaticLighting", "SolidLighting"):
+    elif kind in ("StaticLighting", "SolidLighting"):
         c = e.stops[0][1]
-    elif e.kind == "GradientLighting":
-        # shortcut: stops are interpolated in RGB over one loop of `duration`; stop times are 0..1
-        c = _lerp(e.stops, (t_ms % e.duration_ms) / e.duration_ms if e.duration_ms else 0.0)
-    elif e.kind == "TemperatureLighting":
+    elif kind == "GradientLighting":
+        c = _lerp(e.stops, phase)  # shortcut: stops are interpolated in RGB over one loop; stop times are 0..1
+    elif kind == "TemperatureLighting":
         c = _lerp(e.stops, temp_c if temp_c is not None else e.stops[0][0])
+    elif kind == "SingleColorPulseLighting":
+        c = _scaled(e.stops[0][1], 0.5 - 0.5 * math.cos(2 * math.pi * phase))  # fades from dark up to full and back
+    elif kind == "BlinkLighting":
+        c = e.stops[0][1] if phase < 0.5 or len(e.stops) < 2 else e.stops[1][1]
+    elif kind == "SingleColorVisorLighting":
+        centre = (1 - abs(2 * phase - 1)) * max(zones - 1, 0)  # sweeps out and back across the LEDs
+        c = _scaled(e.stops[0][1], max(0.0, 1 - abs(zone - centre)))
     else:
         return None
     k = max(0, min(10, e.brightness)) / 10  # shortcut: iCUE brightness 0-10 taken as a linear scale
-    return tuple(round(v * 255 * k) for v in (c.r, c.g, c.b))  # type: ignore[return-value]
+    return tuple(round(max(0.0, min(1.0, v)) * 255 * k) for v in (c.r, c.g, c.b))  # type: ignore[return-value]
 
 
 def render(layers: list[LightingLayer], t_ms: float, temp_c: float | None = None) -> dict[int, RGB]:
@@ -45,12 +67,11 @@ def render(layers: list[LightingLayer], t_ms: float, temp_c: float | None = None
     for layer in reversed(layers):
         if not layer.enabled or layer.effect is None:
             continue
-        col = effect_color(layer.effect, t_ms, temp_c)
-        if col is None:
-            continue
         for led in layer.leds:
             if led in ZONES:
-                frame[ZONES[led]] = col
+                col = effect_color(layer.effect, t_ms, temp_c, ZONES[led] - 1, len(ZONES))
+                if col is not None:
+                    frame[ZONES[led]] = col
     return frame
 
 
