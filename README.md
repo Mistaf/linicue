@@ -75,9 +75,15 @@ The window tests run headless (they need PySide6). Tests that read your own iCUE
 those folders are absent; both are git-ignored, as is the probe capture. Never commit them: they hold your profiles, paths and settings.
 
 ## Disclaimer and credits
+**This program was written by AI.** It was built by Claude (Anthropic's AI model), working from a human's requests and testing on
+their own mouse. Review the code before trusting it with anything important.
+
 linicue is an independent project, not affiliated with or endorsed by Corsair; "Corsair" and "iCUE" are trademarks of their owners.
 It sends the mouse the same USB commands iCUE does. The byte layouts were read from iCUE's own program code on a Windows install for
 interoperability (no iCUE code or files are included here) and cross-checked against the open-source projects
 [ckb-next](https://github.com/ckb-next/ckb-next) and [OpenRGB](https://openrgb.org), which documented this protocol family first.
 Use it at your own risk: while it runs it changes how the mouse behaves (nearly everything it writes is temporary, but the polling rate
 may be stored in the mouse), and it deliberately never writes the mouse's onboard profile storage.
+
+## License
+MIT, see [LICENSE](LICENSE).
