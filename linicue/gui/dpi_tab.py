@@ -1,0 +1,133 @@
+"""DPI editor: five stages and the sniper stage (shared by all profiles through the preset)."""
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout,
+                               QWidget)
+
+from ..profile import Color
+from .common import ColorButton
+
+STAGES = ["1", "2", "3", "4", "5", "sniper"]
+
+
+class DpiTab(QWidget):
+    """Edits the raw preset dicts (the same structure dpi.json stores); the window saves them."""
+    changed = Signal()
+    presetsChanged = Signal()
+
+    def __init__(self, presets: dict[str, dict]):
+        super().__init__()
+        self.presets, self.profile, self.loading = presets, None, False
+        self.which = QComboBox()
+        self.which.activated.connect(self._pick_preset)
+        self.name = QLineEdit()
+        self.name.textEdited.connect(self._name_edited)
+        new = QPushButton("New preset")
+        new.clicked.connect(self._new_preset)
+        grid = QGridLayout()
+        for c, h in enumerate(("Stage", "On", "DPI", "Light colour")):
+            grid.addWidget(QLabel(f"<b>{h}</b>"), 0, c)
+        self.rows: dict[str, tuple[QLabel, QCheckBox, QSpinBox, ColorButton]] = {}
+        for r, key in enumerate(STAGES, 1):
+            on = QCheckBox()
+            dpi = QSpinBox(minimum=100, maximum=26000, singleStep=50)
+            col = ColorButton()
+            label = QLabel("Sniper (while the sniper button is held)" if key == "sniper" else f"Stage {key}")
+            on.toggled.connect(lambda v, k=key: self._edited(k, "enabled", v))
+            dpi.valueChanged.connect(lambda v, k=key: self._edited(k, "dpi", v))
+            col.colorChanged.connect(lambda c, k=key: self._edited(k, "color", [round(c.r * 255), round(c.g * 255), round(c.b * 255)]))
+            for c, w in enumerate((label, on, dpi, col)):
+                grid.addWidget(w, r, c)
+            self.rows[key] = (label, on, dpi, col)
+        self.default = QComboBox()
+        self.default.addItems([f"Stage {i}" for i in range(1, 6)])
+        self.default.activated.connect(self._default_edited)
+        self.use = QLabel()
+        note = QLabel("The DPI button cycles the enabled stages. The DPI light shows the colour of the active stage. "
+                      "Changes apply when the daemon reloads (a second after saving).")
+        note.setWordWrap(True)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("DPI preset used by this profile:"))
+        lay.addWidget(self.which)
+        lay.addWidget(self.name)
+        lay.addWidget(new)
+        lay.addLayout(grid)
+        lay.addWidget(QLabel("Starts on:"))
+        lay.addWidget(self.default)
+        lay.addWidget(note)
+        lay.addStretch(1)
+
+    def set_profile(self, profile) -> None:
+        self.profile = profile
+        self.setEnabled(profile is not None and bool(self.presets))
+        self.refill()
+
+    def refill(self) -> None:
+        self.loading = True
+        self.which.clear()
+        for pid, p in self.presets.items():
+            self.which.addItem(p.get("name") or "(unnamed)", pid)
+        ref = self.profile.mouse.dpi_ref if self.profile and self.profile.mouse else ""
+        i = self.which.findData(ref)
+        self.which.setCurrentIndex(max(0, i))
+        self._load(self.which.currentData())
+        self.loading = False
+
+    def _load(self, pid) -> None:
+        p = self.presets.get(pid)
+        self.name.setText(p.get("name", "") if p else "")
+        for key, (_, on, dpi, col) in self.rows.items():
+            st = (p or {}).get("sniper" if key == "sniper" else "stages", {})
+            st = st if key == "sniper" else st.get(key)
+            if st:
+                on.setChecked(st["enabled"])
+                dpi.setValue(st["dpi"][0])
+                col.set_color(Color(*(c / 255 for c in st["color"])))
+        self.default.setCurrentIndex(int((p or {}).get("default", 1)) - 1)
+
+    @property
+    def preset(self) -> dict | None:
+        return self.presets.get(self.which.currentData())
+
+    def _pick_preset(self, _=None) -> None:
+        pid = self.which.currentData()
+        if self.profile and self.profile.mouse and pid:
+            self.profile.mouse.dpi_ref = pid
+            self._load(pid)
+            self.changed.emit()
+
+    def _edited(self, key: str, field: str, value) -> None:
+        if self.loading or not self.preset:
+            return
+        st = self.preset["sniper"] if key == "sniper" else self.preset["stages"][key]
+        st["dpi"] = [value, value] if field == "dpi" else st["dpi"]
+        if field != "dpi":
+            st[field] = value
+        self.presetsChanged.emit()
+
+    def _default_edited(self, i: int) -> None:
+        if self.preset:
+            self.preset["default"] = i + 1
+            self.presetsChanged.emit()
+
+    def _name_edited(self, text: str) -> None:
+        if self.preset and not self.loading:
+            self.preset["name"] = text
+            self.which.setItemText(self.which.currentIndex(), text or "(unnamed)")
+            self.presetsChanged.emit()
+
+    def _new_preset(self) -> None:
+        import copy
+        import uuid
+        base = copy.deepcopy(self.preset) if self.preset else {
+            "default": 2, "stages": {str(i): {"dpi": [800 * i, 800 * i], "enabled": i <= 3, "color": [255, 255, 255]} for i in range(1, 6)},
+            "sniper": {"dpi": [400, 400], "enabled": True, "color": [255, 255, 0]}}
+        base["name"] = (base.get("name") or "Preset") + " copy"
+        pid = "{%s}" % uuid.uuid4()
+        self.presets[pid] = base
+        if self.profile and self.profile.mouse:
+            self.profile.mouse.dpi_ref = pid
+        self.refill()
+        self.presetsChanged.emit()
+        self.changed.emit()

@@ -1,0 +1,40 @@
+# Copy to ~/.config/linicue/rules.toml.  Everything here is optional: rules are
+# derived from each profile's linked programs; this file only adds to them.
+
+[steam]
+# Extra Steam library folders (the ones in Steam's libraryfolders.vdf are found automatically).
+libraries = []
+
+[ignore]
+# Window classes that must not trigger a profile switch (plasmashell, krunner, ... are built in).
+classes = []
+
+# Profiles that share a program (for example two profiles for one game) are a pair: the one in use stays active
+# and you switch with the mouse's profile-switch button.
+# `title` (a regex searched in the window title) can still be added to make a profile match only then:
+# [[profile]]
+# name = "My profile"
+# title = "^Some title"
+
+# `class` adds extra window classes / desktop-file names that select a profile:
+# [[profile]]
+# name = "Discord"
+# class = ["other-client", "another-client"]
+
+[lighting]
+# LEDs that stay dark whatever the profile says: MouseFrontLed, MouseLogoLed, MouseDpiLed, MouseScrollLed, MouseSideLed
+skip = []
+
+# Without this section DPI is not touched: the Sniper (G5 by default) and DPI buttons do nothing in software mode.
+# Stage numbers are 1-based; `sniper` is the DPI while Sniper is held; `colors` (optional) are hex, sniper first,
+# then one per stage, and colour the DPI light (zone 3) with the active stage.
+# [dpi]
+# stages = [800, 1600, 3200]
+# sniper = 400
+# start = 2
+# colors = ["ff0000", "00ff00", "0000ff", "ffff00"]
+
+# DPI normally comes from iCUE's own library: run on `icue-appdata/profiles` and ../dpi/dpi.cuelibrary is found
+# automatically (stages, sniper and DPI-light colours included). Only set [dpi] below to override it, or point at the file:
+# [dpi]
+# library = "/path/to/dpi.cuelibrary"

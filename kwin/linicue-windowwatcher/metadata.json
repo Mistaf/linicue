@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Id": "linicue-windowwatcher",
+        "Name": "linicue window watcher",
+        "Description": "Reports the focused window to the linicue daemon over D-Bus",
+        "Version": "0.1",
+        "License": "MIT"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js",
+    "KPackageStructure": "KWin/Script"
+}

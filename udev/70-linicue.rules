@@ -1,0 +1,6 @@
+# Lets the logged-in user read the Scimitar RGB Elite's hidraw nodes and create virtual input devices.
+# Must be numbered below 73: uaccess tags set after 73-seat-late.rules have no effect.
+# Install: sudo cp udev/70-linicue.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# Then replug the mouse.
+KERNEL=="hidraw*", ATTRS{idVendor}=="1b1c", ATTRS{idProduct}=="1b8b", TAG+="uaccess"
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
