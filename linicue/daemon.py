@@ -52,6 +52,7 @@ class Daemon:
         self.snap_sent: tuple | None = None
         self.on_link_lost: Callable[[Exception], None] = lambda e: None  # set by MouseLink
         self.forced: Profile | None = None  # set by the GUI to preview a profile; window focus is ignored meanwhile
+        self.window_events, self.last_window = 0, "none received yet"  # for `linicue status`
         self.player = Player(sink, on_switch=self.switch_profile, log=log,
                              on_dpi=dpi.handle if dpi else lambda fn, down: log("DPI button pressed but no DPI settings found (see README)"))
         self.switcher = Switcher(rules, self._apply)
@@ -86,9 +87,24 @@ class Daemon:
         self.log(f"profile -> {profile.name}" + (f"  ({match.reason})" if match and match.score else ""))
 
     def on_window(self, resource_class: str, resource_name: str, desktop_file: str, caption: str, pid: int) -> None:
+        self.window_events += 1
+        seen = f"class={resource_class!r} desktop={desktop_file!r} pid={pid}"
         if self.forced:
+            self.last_window = f"{seen} -> ignored, '{self.forced.name}' is pinned"
             return
-        self.switcher.on_window(window_from_event(resource_class, resource_name, desktop_file, caption, pid))
+        m = self.switcher.on_window(window_from_event(resource_class, resource_name, desktop_file, caption, pid))
+        if m is None:
+            self.last_window = f"{seen} -> ignored (a desktop surface such as the panel)"
+        else:
+            self.last_window = f"{seen} -> {m.profile.name if m.profile else 'no profile'} ({m.reason})"
+
+    def status(self) -> str:
+        """What `linicue status` prints: why the mouse is (not) following the focused window."""
+        from . import __version__
+        pinned = f"pinned: '{self.forced.name}' (window focus is ignored; untick \"Show on mouse\" or restart to release)" if self.forced else "follows the focused window"
+        mouse = "dry run" if self.dry else "connected" if self.control is not None else "NOT connected"
+        return "\n".join([f"linicue {__version__}", f"profile: {self.profile.name if self.profile else 'none'} ({pinned})",
+                           f"mouse: {mouse}", f"window events received: {self.window_events}", f"last window: {self.last_window}"])
 
     def force(self, profile_id: str) -> bool:
         """Pin a profile (GUI preview); an empty id releases the pin so window focus rules apply again."""

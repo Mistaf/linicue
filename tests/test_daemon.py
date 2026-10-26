@@ -126,6 +126,24 @@ class DaemonTests(unittest.TestCase):
         d.reload([default], RuleSet([default]), {})
         self.assertEqual(d.profile.name, "Default")
 
+    def test_status_explains_what_the_daemon_is_doing(self):
+        a = profile("A", "a.exe")
+        d, _, _ = make(profile("Default", initial=True), a)
+        self.assertIn("window events received: 0", d.status())
+        d.on_window("a", "", "a", "t", 0)
+        s = d.status()
+        self.assertIn("profile: A (follows the focused window)", s)
+        self.assertIn("mouse: connected", s)
+        self.assertIn("class='a'", s)
+        self.assertIn("-> A (", s)
+        d.on_window("plasmashell", "", "", "", 0)
+        self.assertIn("ignored (a desktop surface", d.status())
+        d.force(a.id)
+        d.on_window("zzz", "", "", "", 0)
+        self.assertIn("pinned: 'A'", d.status())
+        self.assertIn("ignored, 'A' is pinned", d.status())
+        self.assertIn("window events received: 3", d.status())
+
     def test_start_and_stop_hand_buttons_and_lighting_back(self):
         d, _, ctl = make(profile("Default", initial=True))
         d.start()

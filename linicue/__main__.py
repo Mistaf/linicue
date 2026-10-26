@@ -18,6 +18,9 @@ def main(argv: list[str] | None = None) -> int:
         from . import __version__
         print(f"linicue {__version__}")
         return 0
+    if argv[:1] == ["status"]:
+        from .dbus_service import status_main
+        return status_main()
     if argv[:1] == ["probe"]:
         from .probe import main as probe_main
         return probe_main(argv[1:])

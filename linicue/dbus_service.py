@@ -16,6 +16,10 @@ class _Iface(ServiceInterface):
 
 
     @method()
+    def Status(self) -> 's':  # noqa: F821
+        return self.daemon.status()
+
+    @method()
     def Reload(self):
         self.daemon.reload(*self.rebuild())
 
@@ -27,7 +31,11 @@ class _Iface(ServiceInterface):
 async def serve(daemon, rebuild) -> None:
     bus = await MessageBus().connect()
     bus.export("/org/linicue/Daemon", _Iface(daemon, rebuild))
-    await bus.request_name("org.linicue.Daemon")
+    from dbus_next import RequestNameReply
+
+    if await bus.request_name("org.linicue.Daemon") != RequestNameReply.PRIMARY_OWNER:
+        raise RuntimeError("another linicue daemon already owns org.linicue.Daemon, so this one gets no window events: "
+                           "stop the other one (a terminal, or an old service)")
     await asyncio.Event().wait()  # run until cancelled
 
 
@@ -41,3 +49,19 @@ async def watch_sleep(on_resume) -> None:
     manager = bus.get_proxy_object("org.freedesktop.login1", path, intro).get_interface("org.freedesktop.login1.Manager")
     manager.on_prepare_for_sleep(lambda going_to_sleep: None if going_to_sleep else on_resume())
     await asyncio.Event().wait()
+
+
+def status_main() -> int:
+    """`linicue status`: ask the running daemon what it is doing."""
+    async def ask() -> str:
+        bus = await MessageBus().connect()
+        path, name = "/org/linicue/Daemon", "org.linicue.Daemon"
+        proxy = bus.get_proxy_object(name, path, await bus.introspect(name, path))
+        return await proxy.get_interface(name).call_status()
+
+    try:
+        print(asyncio.run(ask()))
+        return 0
+    except Exception as e:  # no daemon on the bus, no session bus, ...
+        print(f"cannot reach the linicue daemon ({type(e).__name__}): is it running?  systemctl --user status linicue")
+        return 1

@@ -47,6 +47,41 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(rules.read_text(), "# my edits\n")
         r.tmp.cleanup()
 
+    def test_reports_other_launchers_that_start_linicue_another_way(self):
+        r = Rig()
+        icons = r.home / ".local/share/plasma_icons"
+        icons.mkdir(parents=True)
+        (icons / "linicue.desktop").write_text("[Desktop Entry]\nExec=env PYTHONPATH=/old /old/.venv/bin/python -m linicue gui\n")
+        (icons / "other.desktop").write_text("[Desktop Entry]\nExec=/usr/bin/true\n")  # unrelated: not reported
+        auto = r.home / ".config/autostart"
+        auto.mkdir(parents=True)
+        (auto / "linicue.desktop").write_text("[Desktop Entry]\nExec=linicue gui\n")
+        r.inst.install()
+        found = {f.name for f, _ in r.inst.other_launchers()}
+        self.assertEqual(found, {"linicue.desktop"})
+        self.assertEqual(len(r.inst.other_launchers()), 2)  # the plasma_icons copy and the autostart entry
+        self.assertTrue(any("/old/.venv/bin/python" in s for s in r.said))
+        self.assertTrue(any("kbuildsycoca6" in s for s in r.said))
+        r.tmp.cleanup()
+
+    def test_menu_cache_is_rebuilt_when_the_tool_exists(self):
+        r = Rig(tools=("systemctl", "kpackagetool6", "kbuildsycoca6"))
+        r.inst.install()
+        self.assertIn(["kbuildsycoca6", "--noincremental"], r.ran)
+        r.ran.clear()
+        r.inst.uninstall()
+        self.assertIn(["kbuildsycoca6", "--noincremental"], r.ran)
+        r.tmp.cleanup()
+
+    def test_launcher_names_its_window_class_so_the_icon_matches(self):
+        self.assertIn("StartupWMClass=linicue", desktop_text("/venv/bin/python", Path("/proj")))
+
+    def test_tells_you_to_reload_the_kwin_script(self):
+        r = Rig()
+        r.inst.install()
+        self.assertTrue(any("log out and in" in s for s in r.said))
+        r.tmp.cleanup()
+
     def test_upgrades_the_kwin_script_when_already_installed(self):
         r = Rig(kwin_listing=f"Listing service types: KWin/Script\n{KWIN_ID}\n")
         r.inst.install()

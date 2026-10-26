@@ -54,6 +54,37 @@ class GuiTests(unittest.TestCase):
         self.assertEqual([self.w.list.item(i).text() for i in range(2)], ["★ Alpha", "Beta"])
         self.assertIs(self.w.links.profile, self.w.current)
 
+    def test_show_on_mouse_pins_says_so_follows_selection_and_releases_on_close(self):
+        calls = []
+
+        class FakeIface:
+            def call(self, name, *args):
+                calls.append((name, args))
+
+        self.w.daemon.iface = FakeIface()
+        self.w._refresh_status()
+        self.assertIn("daemon: connected", self.w.status.text())
+        self.assertNotIn("PINNED", self.w.status.text())
+        self.w.preview.setChecked(True)
+        self.assertEqual(calls[-1], ("ForceProfile", (self.w.current.id,)))
+        self.assertIn("PINNED", self.w.status.text())  # visible, not a silent mode
+        self.select("Beta")
+        self.assertEqual(calls[-1], ("ForceProfile", (self.w.current.id,)))
+        self.w.preview.setChecked(False)
+        self.assertEqual(calls[-1], ("ForceProfile", ("",)))
+        self.assertNotIn("PINNED", self.w.status.text())
+        self.w.preview.setChecked(True)
+        self.w.close()
+        self.assertEqual(calls[-1], ("ForceProfile", ("",)))  # closing never leaves a pin behind
+
+    def test_app_identifies_itself_so_plasma_finds_the_icon(self):
+        from PySide6.QtGui import QGuiApplication
+        from linicue.gui.window import configure_app
+        configure_app(self.app)
+        self.assertEqual(QGuiApplication.desktopFileName(), "linicue")  # the Wayland app id = linicue.desktop
+        self.assertEqual(self.app.applicationName(), "linicue")
+        self.assertIsNotNone(self.app.windowIcon())
+
     def test_startup_and_delete_select_the_default_profile(self):
         from linicue.gui.window import MainWindow
         self.select("Beta")

@@ -38,6 +38,7 @@ Name=linicue
 Comment=Scimitar RGB Elite: profiles, lighting, buttons, macros and DPI
 Exec=env PYTHONPATH={root} {python} -m linicue gui
 Icon=input-mouse
+StartupWMClass=linicue
 Terminal=false
 Categories=Settings;HardwareSettings;
 """
@@ -75,6 +76,8 @@ class Installer:
                 self.say(f"note: {pip} is not installed for {self.python}; run: {self.python} -m pip install {pip}")
         self.write(self.unit, unit_text(self.python, self.root))
         self.write(self.desktop, desktop_text(self.python, self.root))
+        self._report_other_launchers()
+        self._refresh_menu()
         rules = self.home / ".config/linicue/rules.toml"  # the example is all comments, so it changes nothing until edited
         if rules.exists():
             self.say(f"keep  {rules} (already there)")
@@ -93,6 +96,32 @@ class Installer:
                      "&& sudo udevadm control --reload && sudo udevadm trigger")
         self.say("\nDone. Open “linicue” from the application menu, or run: " f"{self.python} -m linicue gui")
 
+    def other_launchers(self) -> list[tuple[Path, str]]:
+        """Other .desktop files that start linicue differently. Plasma keeps its own copies of pinned or favourite
+        launchers (plasma_icons), so the menu can keep opening an old install after this one was rewritten."""
+        ours = desktop_text(self.python, self.root).split("Exec=", 1)[1].splitlines()[0]
+        found = []
+        for folder in ("applications", "plasma_icons"):
+            for f in sorted((self.home / ".local/share" / folder).glob("*.desktop")):
+                for line in f.read_text(errors="replace").splitlines():
+                    if line.startswith("Exec=") and "linicue" in line and line[5:] != ours and f != self.desktop:
+                        found.append((f, line))
+                        break
+        for f in sorted((self.home / ".config/autostart").glob("*.desktop")):
+            if "linicue" in f.read_text(errors="replace") and f != self.desktop:
+                found.append((f, "(autostart entry)"))
+        return found
+
+    def _refresh_menu(self) -> None:
+        """KDE caches its application menu; without this a rewritten entry can keep launching the old command."""
+        if self.which("kbuildsycoca6"):
+            self.cmd("kbuildsycoca6", "--noincremental")
+
+    def _report_other_launchers(self) -> None:
+        for f, line in self.other_launchers():
+            self.say(f"note: another launcher starts linicue differently: {f}\n      {line}\n"
+                     "      If it is an old copy, delete it and run: kbuildsycoca6 --noincremental")
+
     def _kwin_install(self) -> None:
         if not self.which("kpackagetool6"):
             self.say("kpackagetool6 not found: install the KWin script by hand (see README)")
@@ -102,6 +131,8 @@ class Installer:
         self.cmd("kpackagetool6", "--type=KWin/Script", "--upgrade" if KWIN_ID in listing else "--install", src)
         self.cmd("kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", f"{KWIN_ID}Enabled", "true")
         self.cmd("busctl", "--user", "call", "org.kde.KWin", "/KWin", "org.kde.KWin", "reconfigure")
+        self.say("note: KWin keeps running the old script until it is reloaded: log out and in, or switch "
+                 "“linicue window watcher” off and on in System Settings > Window Management > KWin Scripts")
 
     # --- uninstall ----------------------------------------------------------------------------
     def uninstall(self) -> None:
@@ -113,6 +144,7 @@ class Installer:
                 path.unlink(missing_ok=True)
         if self.which("systemctl"):
             self.cmd("systemctl", "--user", "daemon-reload")
+        self._refresh_menu()
         if self.which("kpackagetool6"):
             self.cmd("kwriteconfig6", "--file", "kwinrc", "--group", "Plugins", "--key", f"{KWIN_ID}Enabled", "false")
             self.cmd("kpackagetool6", "--type=KWin/Script", "--remove", KWIN_ID)

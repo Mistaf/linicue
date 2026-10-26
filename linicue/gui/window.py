@@ -6,6 +6,7 @@ import sys
 import uuid
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSplitter, QTabWidget,
                                QVBoxLayout, QWidget)
@@ -227,7 +228,13 @@ class MainWindow(QMainWindow):
         self._refresh_status()
 
     def _refresh_status(self) -> None:
-        self.status.setText("daemon: connected" if self.daemon.connected else "daemon: not running (preview off)")
+        if not self.daemon.connected:
+            self.status.setText("daemon: not running (preview off)")
+        elif self.preview.isChecked():  # a pin silently stops window-based switching, so say so
+            self.status.setText("daemon: connected. PINNED: this profile stays on the mouse and automatic switching is paused")
+        else:
+            self.status.setText("daemon: connected")
+        self.status.setWordWrap(True)
         self.preview.setEnabled(self.daemon.connected)
 
     def closeEvent(self, e) -> None:
@@ -236,8 +243,17 @@ class MainWindow(QMainWindow):
         super().closeEvent(e)
 
 
+def configure_app(app: QApplication) -> None:
+    """Identify the app to the desktop. On Wayland the window's id must equal the .desktop file's name, or Plasma
+    cannot find the icon (it shows a generic one) and does not group the window with its launcher."""
+    app.setApplicationName("linicue")
+    app.setDesktopFileName("linicue")
+    app.setWindowIcon(QIcon.fromTheme("input-mouse"))
+
+
 def main() -> int:
     app = QApplication(sys.argv)
+    configure_app(app)
     w = MainWindow()
     w.show()
     return app.exec()

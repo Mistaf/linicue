@@ -7,7 +7,7 @@ focused window (KDE Plasma 6), plays their lighting, remaps the G buttons, runs 
 ```bash
 python3 -m venv ~/.local/share/linicue/venv
 ~/.local/share/linicue/venv/bin/pip install ".[gui]"          # run inside the project folder (or pass the wheel's path)
-ln -sf ~/.local/share/linicue/venv/bin/linicue ~/.local/bin/linicue
+mkdir -p ~/.local/bin && ln -sf ~/.local/share/linicue/venv/bin/linicue ~/.local/bin/linicue   # then open a new terminal
 linicue install --dry-run     # shows what it will do
 linicue install               # service (starts at login), "linicue" menu entry, KWin window script, example config
 ```
@@ -17,7 +17,7 @@ Everything lives under your home folder, so the project folder can be anywhere, 
 The daemon waits for the mouse, reconnects after unplugging, and re-initialises it after suspend.
 
 **Updating:** run the same `pip install ".[gui]"` again from the new source, then `systemctl --user restart linicue`
-(`linicue install` also works and refreshes the KWin script). `linicue --version` and the first lines of
+(`linicue install` also works and refreshes the KWin script; log out and in afterwards so KWin loads it). `linicue --version` and the first lines of
 `journalctl --user -u linicue -b` show which version is running.
 
 **From the source folder, without installing:** `python3 -m linicue ...` works there too (needs `dbus-next`, and `PySide6` for the window).
@@ -54,7 +54,7 @@ linicue run <iCUE profiles folder>   # read iCUE's own files directly instead (r
 If you used `install`, the daemon already runs as a service: `systemctl --user status linicue`, `journalctl --user -u linicue -f`.
 
 ## Other commands
-`install`, `uninstall`, `import`, `gui`, `version`, `list`, `show`, `rules` (check app matching), `preview` (lighting only),
+`install`, `uninstall`, `import`, `gui`, `status` (asks the running daemon what it is doing), `version`, `list`, `show`, `rules` (check app matching), `preview` (lighting only),
 `lights` (LED test, `--restore` undoes it), `probe` (read-only device probe; run as `sudo $(which linicue) probe`), `pollrate` (measures the real polling rate).
 
 ## Status
@@ -65,3 +65,19 @@ actions, and mouse clicks in macros. Not implemented: writing the mouse's onboar
 from this mouse either, so it was left alone), lift height, water-colour, spiral and screen effects, recording mouse clicks
 (add them by hand), typing anything but letters, digits and spaces with the "type text" action.
 The extra lighting effects are approximations of iCUE's (loop length only; iCUE's "speed" values are not interpreted).
+
+## Development
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[gui]"
+.venv/bin/python -m unittest discover -s tests -t .
+```
+The window tests run headless (they need PySide6). Tests that read your own iCUE files (`profiles-src/`, `icue-appdata/`) are skipped when
+those folders are absent; both are git-ignored, as is the probe capture. Never commit them: they hold your profiles, paths and settings.
+
+## Disclaimer and credits
+linicue is an independent project, not affiliated with or endorsed by Corsair; "Corsair" and "iCUE" are trademarks of their owners.
+It sends the mouse the same USB commands iCUE does. The byte layouts were read from iCUE's own program code on a Windows install for
+interoperability (no iCUE code or files are included here) and cross-checked against the open-source projects
+[ckb-next](https://github.com/ckb-next/ckb-next) and [OpenRGB](https://openrgb.org), which documented this protocol family first.
+Use it at your own risk: while it runs it changes how the mouse behaves (nearly everything it writes is temporary, but the polling rate
+may be stored in the mouse), and it deliberately never writes the mouse's onboard profile storage.
